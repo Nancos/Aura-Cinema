@@ -1,0 +1,75 @@
+//
+//  Se.swift
+//  Aura Cinema
+//
+//  Created by MacBook Air on 10.01.25.
+//
+import UIKit
+
+protocol SearchDelegate {
+    func didSearch(text: String)
+    func configureView(with movies: [MovieViewData])
+    func showError(title: String, message: String, alertType: AlertType)
+}
+
+class SearchPresenter {
+    private let savedFilmsService = SavedFilmsService()
+    private let model = SearchModel()
+    var delegate: SearchDelegate?
+    var viewDelegate: FavoritesUpdateDelegate?
+}
+
+@MainActor
+extension SearchPresenter {
+    func fetchMovieData(with text: String) {
+        Task {
+            let ids = await getSavedFilms()
+            do {
+                let cardData = try await model.getSearchedData(with: text)
+                let cardModel = MovieViewModel(movieData: cardData, savedFilms: ids)
+                let movies = cardModel.movies()
+                delegate?.configureView(with: movies)
+            } catch {
+                delegate?.showError(title: "Ошибка",
+                                    message: "Error fetching movie card: \(error)",
+                                    alertType: .standardDefault)
+            }
+        }
+    }
+    
+    
+    func didLikeMovie(withID id: Int){
+        savedFilmsService.addSavedFilms(movie: SavedFilmData(id: id)) { [weak self] result in
+            
+            guard let `self` else { return }
+            
+            switch result {
+            case .success:
+                viewDelegate?.didUpdateLikedMovies(title: "",
+                                                   message: "Фильм добавлен в избранное!",
+                                                   alertType: .timed(time: 0.3))
+            case .failure(let failure):
+                let result = self.savedFilmsService.handleError(error: failure)
+                viewDelegate?.showErrorFavoritesUpdate(title: result.title,
+                                                       message: result.message,
+                                                       alertType: .timed(time: 0.5))
+            }
+        }
+    }
+}
+
+private extension SearchPresenter {
+    func getSavedFilms() async -> [Int] {
+        return await withCheckedContinuation { continuation in
+            savedFilmsService.loadSavedFilms() { result in
+                switch result {
+                case .success(let films):
+                    let ids = films.map(\.id)
+                    continuation.resume(returning: ids)
+                case .failure(_):
+                    continuation.resume(returning: [])
+                }
+            }
+        }
+    }
+}
